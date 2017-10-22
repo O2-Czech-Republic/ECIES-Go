@@ -117,11 +117,13 @@ func MaxSharedKeyLength(pub *PublicKey) int {
 }
 
 // ECDH key agreement method used to establish secret keys for encryption.
-func (prv *PrivateKey) GenerateShared(pub *PublicKey, skLen, macLen int) (sk []byte, err error) {
+func (prv *PrivateKey) GenerateShared(pub *PublicKey, symmetricKeyLength, macKeyLength int) (sk []byte, err error) {
+
 	if prv.PublicKey.Curve != pub.Curve {
 		return nil, ErrInvalidCurve
 	}
-	if skLen+macLen > MaxSharedKeyLength(pub) {
+
+	if symmetricKeyLength+macKeyLength > MaxSharedKeyLength(pub) {
 		return nil, ErrSharedKeyTooBig
 	}
 
@@ -130,7 +132,7 @@ func (prv *PrivateKey) GenerateShared(pub *PublicKey, skLen, macLen int) (sk []b
 		return nil, ErrSharedKeyIsPointAtInfinity
 	}
 
-	sk = make([]byte, skLen+macLen)
+	sk = make([]byte, symmetricKeyLength+macKeyLength)
 	skBytes := x.Bytes()
 	copy(sk[len(sk)-len(skBytes):], skBytes)
 	return sk, nil
@@ -162,38 +164,43 @@ func incCounter(ctr []byte) {
 	}
 }
 
-// NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
-func concatKDF(hash hash.Hash, z, s1 []byte, kdLen int) (k []byte, err error) {
-	if s1 == nil {
-		s1 = make([]byte, 0)
+// concatKDF derives a symmetric key using a concatenation key derivation function using
+// the `hash` hashing algorithm as the base and continuing until at least
+// `derivedKeyLength` bytes is available
+// See NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
+func concatKDF(hash hash.Hash, z, sharedInformation1 []byte, derivedKeyLength int) (derivedKey []byte, err error) {
+
+	if sharedInformation1 == nil {
+		sharedInformation1 = make([]byte, 0)
 	}
 
-	reps := ((kdLen + 7) * 8) / (hash.BlockSize() * 8)
+	reps := ((derivedKeyLength + 7) * 8) / (hash.BlockSize() * 8)
 	if big.NewInt(int64(reps)).Cmp(big2To32M1) > 0 {
 		fmt.Println(big2To32M1)
 		return nil, ErrKeyDataTooLong
 	}
 
 	counter := []byte{0, 0, 0, 1}
-	k = make([]byte, 0)
+	derivedKey = make([]byte, 0)
 
 	for i := 0; i <= reps; i++ {
 		hash.Write(counter)
 		hash.Write(z)
-		hash.Write(s1)
-		k = append(k, hash.Sum(nil)...)
+		hash.Write(sharedInformation1)
+		derivedKey = append(derivedKey, hash.Sum(nil)...)
 		hash.Reset()
 		incCounter(counter)
 	}
 
-	k = k[:kdLen]
+	// Trim the desired key length to derivedKeyLength
+	derivedKey = derivedKey[:derivedKeyLength]
 	return
 }
 
 // messageTag computes the MAC of a message (called the tag) as per
 // SEC 1, 3.5.
-func messageTag(hash func() hash.Hash, km, msg, shared []byte) []byte {
-	mac := hmac.New(hash, km)
+func messageTag(hash func() hash.Hash, key, msg, shared []byte) []byte {
+	mac := hmac.New(hash, key)
 	mac.Write(msg)
 	mac.Write(shared)
 	tag := mac.Sum(nil)
@@ -202,10 +209,11 @@ func messageTag(hash func() hash.Hash, km, msg, shared []byte) []byte {
 
 // Encrypt encrypts a message using ECIES as specified in SEC 1, 5.1.
 //
-// s1 and s2 contain shared information that is not part of the resulting
-// ciphertext. s1 is fed into key derivation, s2 is fed into the MAC. If the
+// sharedInformation1 and sharedInformation2 contain shared information that is not part of the resulting
+// ciphertext. sharedInformation1 is fed into key derivation, sharedInformation2 is fed into the MAC. If the
 // shared information parameters aren't being used, they should be nil.
-func Encrypt(rand io.Reader, pub *PublicKey, plaintext, s1, s2 []byte) (ct []byte, err error) {
+func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, sharedInformation2 []byte) (ciphertext []byte, err error) {
+
 	params := pub.Params
 	if params == nil {
 		if params = ParamsFromCurve(pub.Curve); params == nil {
@@ -213,66 +221,91 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, s1, s2 []byte) (ct []byt
 			return
 		}
 	}
-	R, err := GenerateKey(rand, pub.Curve, params)
+
+	// Generate an ephemeral key pair
+	privateKey, err := GenerateKey(rand, pub.Curve, params)
 	if err != nil {
 		return
 	}
 
+	// Derive a shared secret from the generated private key and the peer public key
+	sharedSecret, err := privateKey.GenerateShared(pub, params.KeyLen, params.KeyLen)
+	if err != nil {
+		return
+	}
+
+	// Extend the shared secret through Concatenation KDF to the desired length
+	// The extended key will then be split and used as an encryption key and digest key
 	hash := params.Hash()
-	z, err := R.GenerateShared(pub, params.KeyLen, params.KeyLen)
+	derivedKey, err := concatKDF(hash, sharedSecret, sharedInformation1, params.KeyLen+params.KeyLen)
 	if err != nil {
 		return
 	}
-	K, err := concatKDF(hash, z, s1, params.KeyLen+params.KeyLen)
-	if err != nil {
-		return
-	}
-	Ke := K[:params.KeyLen]
-	Km := K[params.KeyLen:]
-	hash.Write(Km)
-	Km = hash.Sum(nil)
+
+	// The derived key is split into encryption key and digest key
+	// which is then hashed to produce the final HMAC key
+	encryptionKey := derivedKey[:params.KeyLen]
+
+	digestKey := derivedKey[params.KeyLen:]
+	hash.Write(digestKey)
+	digestKey = hash.Sum(nil)
 	hash.Reset()
 
-	em, err := SymmetricEncrypt(rand, params, Ke, plaintext)
-	if err != nil || len(em) <= params.BlockSize {
+	// Encrypt the message using the first half of the derived symmetric key
+	encryptedMessage, err := SymmetricEncrypt(rand, params, encryptionKey, plaintext)
+	if err != nil || len(encryptedMessage) <= params.BlockSize {
 		return
 	}
 
-	d := messageTag(params.Hash, Km, em, s2)
+	// Calculate message digest of the ciphertext using the specified hashing function
+	// and the second half of the derived symmetric key
+	digest := messageTag(params.Hash, digestKey, encryptedMessage, sharedInformation2)
 
-	Rb := elliptic.Marshal(pub.Curve, R.PublicKey.X, R.PublicKey.Y)
-	ct = make([]byte, len(Rb)+len(em)+len(d))
-	copy(ct, Rb)
-	copy(ct[len(Rb):], em)
-	copy(ct[len(Rb)+len(em):], d)
+	// Serialize the properties of the used elliptic curve
+	curveParams := elliptic.Marshal(pub.Curve, privateKey.PublicKey.X, privateKey.PublicKey.Y)
+
+	// Prepare ciphertext byte sink
+	ciphertext = make([]byte, len(curveParams)+len(encryptedMessage)+len(digest))
+
+	// Fill the ciphertext byte sink with:
+	//   1. marshalled curve properties
+	//   2. encrypted message
+	//   3. the message digest
+	copy(ciphertext, curveParams)
+	copy(ciphertext[len(curveParams):], encryptedMessage)
+	copy(ciphertext[len(curveParams)+len(encryptedMessage):], digest)
+
 	return
 }
 
 // Decrypt decrypts an ECIES ciphertext.
-func (prv *PrivateKey) Decrypt(rand io.Reader, ciphertext, s1, s2 []byte) (m []byte, err error) {
+func (privateKey *PrivateKey) Decrypt(rand io.Reader, ciphertext, sharedInformation1, sharedInformation2 []byte) (plaintext []byte, err error) {
+
 	if len(ciphertext) == 0 {
 		return nil, ErrInvalidMessage
 	}
-	params := prv.PublicKey.Params
+
+	params := privateKey.PublicKey.Params
 	if params == nil {
-		if params = ParamsFromCurve(prv.PublicKey.Curve); params == nil {
+		if params = ParamsFromCurve(privateKey.PublicKey.Curve); params == nil {
 			err = ErrUnsupportedECIESParameters
 			return
 		}
 	}
+
 	hash := params.Hash()
 
 	var (
-		rLen   int
-		hLen   int = hash.Size()
-		mStart int
-		mEnd   int
+		curveParamsLength int
+		hashLength        int = hash.Size()
+		messageStart      int
+		messageEnd        int
 	)
 
 	switch ciphertext[0] {
 	case 2, 3, 4:
-		rLen = ((prv.PublicKey.Curve.Params().BitSize + 7) / 4)
-		if len(ciphertext) < (rLen + hLen + 1) {
+		curveParamsLength = ((privateKey.PublicKey.Curve.Params().BitSize + 7) / 4)
+		if len(ciphertext) < (curveParamsLength + hashLength + 1) {
 			err = ErrInvalidMessage
 			return
 		}
@@ -281,43 +314,43 @@ func (prv *PrivateKey) Decrypt(rand io.Reader, ciphertext, s1, s2 []byte) (m []b
 		return
 	}
 
-	mStart = rLen
-	mEnd = len(ciphertext) - hLen
+	messageStart = curveParamsLength
+	messageEnd = len(ciphertext) - hashLength
 
-	R := new(PublicKey)
-	R.Curve = prv.PublicKey.Curve
-	R.X, R.Y = elliptic.Unmarshal(R.Curve, ciphertext[:rLen])
-	if R.X == nil {
+	publicKey := new(PublicKey)
+	publicKey.Curve = privateKey.PublicKey.Curve
+	publicKey.X, publicKey.Y = elliptic.Unmarshal(publicKey.Curve, ciphertext[:curveParamsLength])
+	if publicKey.X == nil {
 		err = ErrInvalidPublicKey
 		return
 	}
-	if !R.Curve.IsOnCurve(R.X, R.Y) {
+	if !publicKey.Curve.IsOnCurve(publicKey.X, publicKey.Y) {
 		err = ErrInvalidCurve
 		return
 	}
 
-	z, err := prv.GenerateShared(R, params.KeyLen, params.KeyLen)
+	sharedSecret, err := privateKey.GenerateShared(publicKey, params.KeyLen, params.KeyLen)
 	if err != nil {
 		return
 	}
 
-	K, err := concatKDF(hash, z, s1, params.KeyLen+params.KeyLen)
+	derivedKey, err := concatKDF(hash, sharedSecret, sharedInformation1, params.KeyLen+params.KeyLen)
 	if err != nil {
 		return
 	}
 
-	Ke := K[:params.KeyLen]
-	Km := K[params.KeyLen:]
-	hash.Write(Km)
-	Km = hash.Sum(nil)
+	encryptionKey := derivedKey[:params.KeyLen]
+	digestKey := derivedKey[params.KeyLen:]
+	hash.Write(digestKey)
+	digestKey = hash.Sum(nil)
 	hash.Reset()
 
-	d := messageTag(params.Hash, Km, ciphertext[mStart:mEnd], s2)
-	if subtle.ConstantTimeCompare(ciphertext[mEnd:], d) != 1 {
+	d := messageTag(params.Hash, digestKey, ciphertext[messageStart:messageEnd], sharedInformation2)
+	if subtle.ConstantTimeCompare(ciphertext[messageEnd:], d) != 1 {
 		err = ErrInvalidMessage
 		return
 	}
 
-	m, err = SymmetricDecrypt(rand, params, Ke, ciphertext[mStart:mEnd])
+	plaintext, err = SymmetricDecrypt(rand, params, encryptionKey, ciphertext[messageStart:messageEnd])
 	return
 }
