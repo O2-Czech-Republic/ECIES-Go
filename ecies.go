@@ -30,7 +30,6 @@
 package ecies
 
 import (
-	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -201,54 +200,12 @@ func messageTag(hash func() hash.Hash, km, msg, shared []byte) []byte {
 	return tag
 }
 
-// Generate an initialisation vector for CTR mode.
-func generateIV(params *ECIESParams, rand io.Reader) (iv []byte, err error) {
-	iv = make([]byte, params.BlockSize)
-	_, err = io.ReadFull(rand, iv)
-	return
-}
-
-// symEncrypt carries out CTR encryption using the block cipher specified in the
-// parameters.
-func symEncrypt(rand io.Reader, params *ECIESParams, key, m []byte) (ct []byte, err error) {
-	c, err := params.Cipher(key)
-	if err != nil {
-		return
-	}
-
-	iv, err := generateIV(params, rand)
-	if err != nil {
-		return
-	}
-	ctr := cipher.NewCTR(c, iv)
-
-	ct = make([]byte, len(m)+params.BlockSize)
-	copy(ct, iv)
-	ctr.XORKeyStream(ct[params.BlockSize:], m)
-	return
-}
-
-// symDecrypt carries out CTR decryption using the block cipher specified in
-// the parameters
-func symDecrypt(rand io.Reader, params *ECIESParams, key, ct []byte) (m []byte, err error) {
-	c, err := params.Cipher(key)
-	if err != nil {
-		return
-	}
-
-	ctr := cipher.NewCTR(c, ct[:params.BlockSize])
-
-	m = make([]byte, len(ct)-params.BlockSize)
-	ctr.XORKeyStream(m, ct[params.BlockSize:])
-	return
-}
-
 // Encrypt encrypts a message using ECIES as specified in SEC 1, 5.1.
 //
 // s1 and s2 contain shared information that is not part of the resulting
 // ciphertext. s1 is fed into key derivation, s2 is fed into the MAC. If the
 // shared information parameters aren't being used, they should be nil.
-func Encrypt(rand io.Reader, pub *PublicKey, m, s1, s2 []byte) (ct []byte, err error) {
+func Encrypt(rand io.Reader, pub *PublicKey, plaintext, s1, s2 []byte) (ct []byte, err error) {
 	params := pub.Params
 	if params == nil {
 		if params = ParamsFromCurve(pub.Curve); params == nil {
@@ -276,7 +233,7 @@ func Encrypt(rand io.Reader, pub *PublicKey, m, s1, s2 []byte) (ct []byte, err e
 	Km = hash.Sum(nil)
 	hash.Reset()
 
-	em, err := symEncrypt(rand, params, Ke, m)
+	em, err := SymmetricEncrypt(rand, params, Ke, plaintext)
 	if err != nil || len(em) <= params.BlockSize {
 		return
 	}
@@ -292,8 +249,8 @@ func Encrypt(rand io.Reader, pub *PublicKey, m, s1, s2 []byte) (ct []byte, err e
 }
 
 // Decrypt decrypts an ECIES ciphertext.
-func (prv *PrivateKey) Decrypt(rand io.Reader, c, s1, s2 []byte) (m []byte, err error) {
-	if len(c) == 0 {
+func (prv *PrivateKey) Decrypt(rand io.Reader, ciphertext, s1, s2 []byte) (m []byte, err error) {
+	if len(ciphertext) == 0 {
 		return nil, ErrInvalidMessage
 	}
 	params := prv.PublicKey.Params
@@ -312,10 +269,10 @@ func (prv *PrivateKey) Decrypt(rand io.Reader, c, s1, s2 []byte) (m []byte, err 
 		mEnd   int
 	)
 
-	switch c[0] {
+	switch ciphertext[0] {
 	case 2, 3, 4:
 		rLen = ((prv.PublicKey.Curve.Params().BitSize + 7) / 4)
-		if len(c) < (rLen + hLen + 1) {
+		if len(ciphertext) < (rLen + hLen + 1) {
 			err = ErrInvalidMessage
 			return
 		}
@@ -325,11 +282,11 @@ func (prv *PrivateKey) Decrypt(rand io.Reader, c, s1, s2 []byte) (m []byte, err 
 	}
 
 	mStart = rLen
-	mEnd = len(c) - hLen
+	mEnd = len(ciphertext) - hLen
 
 	R := new(PublicKey)
 	R.Curve = prv.PublicKey.Curve
-	R.X, R.Y = elliptic.Unmarshal(R.Curve, c[:rLen])
+	R.X, R.Y = elliptic.Unmarshal(R.Curve, ciphertext[:rLen])
 	if R.X == nil {
 		err = ErrInvalidPublicKey
 		return
@@ -355,12 +312,12 @@ func (prv *PrivateKey) Decrypt(rand io.Reader, c, s1, s2 []byte) (m []byte, err 
 	Km = hash.Sum(nil)
 	hash.Reset()
 
-	d := messageTag(params.Hash, Km, c[mStart:mEnd], s2)
-	if subtle.ConstantTimeCompare(c[mEnd:], d) != 1 {
+	d := messageTag(params.Hash, Km, ciphertext[mStart:mEnd], s2)
+	if subtle.ConstantTimeCompare(ciphertext[mEnd:], d) != 1 {
 		err = ErrInvalidMessage
 		return
 	}
 
-	m, err = symDecrypt(rand, params, Ke, c[mStart:mEnd])
+	m, err = SymmetricDecrypt(rand, params, Ke, ciphertext[mStart:mEnd])
 	return
 }
