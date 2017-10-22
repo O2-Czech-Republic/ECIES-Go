@@ -1,2 +1,2 @@
 # pexeso-ecies-go
-A go implementation of ECIES with AES-GCM support
+A go implementation of ECIES with support for stream and AEAD symmetric encryption
