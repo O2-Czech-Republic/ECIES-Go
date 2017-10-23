@@ -139,7 +139,7 @@ func incCounter(ctr []byte) {
 // the `hash` hashing algorithm as the base and continuing until at least
 // `derivedKeyLength` bytes is available
 // See NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
-func concatKDF(hash hash.Hash, z, sharedInformation1 []byte, derivedKeyLength int) (derivedKey []byte, err error) {
+func ConcatKDF(hash hash.Hash, z, sharedInformation1 []byte, derivedKeyLength int) (derivedKey []byte, err error) {
 
 	if sharedInformation1 == nil {
 		sharedInformation1 = make([]byte, 0)
@@ -170,7 +170,7 @@ func concatKDF(hash hash.Hash, z, sharedInformation1 []byte, derivedKeyLength in
 
 // messageTag computes the MAC of a message (called the tag) as per
 // SEC 1, 3.5.
-func messageTag(hash func() hash.Hash, key, msg, shared []byte) []byte {
+func MessageTag(hash func() hash.Hash, key, msg, shared []byte) []byte {
 	mac := hmac.New(hash, key)
 	mac.Write(msg)
 	mac.Write(shared)
@@ -216,7 +216,7 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 	// Extend the shared secret through Concatenation KDF to the desired length
 	// The extended key will then be split and used as an encryption key and digest key
 	hash := params.Hash()
-	derivedKey, err := concatKDF(hash, sharedSecret, sharedInformation1, symmetricKeyLength+macKeyLength)
+	derivedKey, err := ConcatKDF(hash, sharedSecret, sharedInformation1, symmetricKeyLength+macKeyLength)
 	if err != nil {
 		return
 	}
@@ -238,7 +238,7 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 
 	// Calculate message digest of the ciphertext using the specified hashing function
 	// and the second half of the derived symmetric key
-	digest := messageTag(params.Hash, digestKey, encryptedMessage, sharedInformation2)
+	digest := MessageTag(params.Hash, digestKey, encryptedMessage, sharedInformation2)
 
 	// Serialize the properties of the used elliptic curve
 	curveParams := elliptic.Marshal(pub.Curve, privateKey.PublicKey.X, privateKey.PublicKey.Y)
@@ -313,7 +313,7 @@ func (privateKey *PrivateKey) Decrypt(rand io.Reader, ciphertext, sharedInformat
 		return
 	}
 
-	derivedKey, err := concatKDF(hash, sharedSecret, sharedInformation1, params.KeyLen+params.KeyLen)
+	derivedKey, err := ConcatKDF(hash, sharedSecret, sharedInformation1, params.KeyLen+params.KeyLen)
 	if err != nil {
 		return
 	}
@@ -324,7 +324,7 @@ func (privateKey *PrivateKey) Decrypt(rand io.Reader, ciphertext, sharedInformat
 	digestKey = hash.Sum(nil)
 	hash.Reset()
 
-	d := messageTag(params.Hash, digestKey, ciphertext[messageStart:messageEnd], sharedInformation2)
+	d := MessageTag(params.Hash, digestKey, ciphertext[messageStart:messageEnd], sharedInformation2)
 	if subtle.ConstantTimeCompare(ciphertext[messageEnd:], d) != 1 {
 		err = ErrInvalidMessage
 		return
