@@ -12,7 +12,7 @@ var CBCCipherMode = SymmetricCipherMode{
 
 // CBCEncrypt performs Cipher Block Chaining (CBC) encryption using the block cipher specified in
 // the parameters
-func CBCEncrypt(rand io.Reader, params *ECIESParams, key, plaintext []byte) ([]byte, error) {
+func CBCEncrypt(rand io.Reader, params *ECIESParams, key, plaintext, authenticationData []byte) ([]byte, error) {
 
 	blockCipher, err := params.Cipher(key)
 	if err != nil {
@@ -30,7 +30,7 @@ func CBCEncrypt(rand io.Reader, params *ECIESParams, key, plaintext []byte) ([]b
 
 // CBCDecrypt performs Cipher Block Chaining (CBC) decryption using the block cipher specified in
 // the parameters
-func CBCDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext []byte) ([]byte, error) {
+func CBCDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext, authenticationData []byte) ([]byte, error) {
 
 	blockCipher, err := params.Cipher(key)
 	if err != nil {

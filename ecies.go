@@ -199,6 +199,9 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 		return
 	}
 
+	// Serialize the properties of the used elliptic curve
+	curveParams := elliptic.Marshal(pub.Curve, privateKey.PublicKey.X, privateKey.PublicKey.Y)
+
 	symmetricKeyLength := 128 / 8
 	macKeyLength := 128 / 8
 
@@ -231,7 +234,7 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 	hash.Reset()
 
 	// Encrypt the message using the first half of the derived symmetric key
-	encryptedMessage, err := SymmetricEncrypt(rand, params, encryptionKey, plaintext)
+	encryptedMessage, err := SymmetricEncrypt(rand, params, encryptionKey, plaintext, curveParams)
 	if err != nil || len(encryptedMessage) <= params.BlockSize {
 		return
 	}
@@ -239,9 +242,6 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 	// Calculate message digest of the ciphertext using the specified hashing function
 	// and the second half of the derived symmetric key
 	digest := MessageTag(params.Hash, digestKey, encryptedMessage, sharedInformation2)
-
-	// Serialize the properties of the used elliptic curve
-	curveParams := elliptic.Marshal(pub.Curve, privateKey.PublicKey.X, privateKey.PublicKey.Y)
 
 	// Prepare ciphertext byte sink
 	ciphertext = make([]byte, len(curveParams)+len(encryptedMessage)+len(digest))
@@ -299,14 +299,20 @@ func (privateKey *PrivateKey) Decrypt(rand io.Reader, ciphertext, sharedInformat
 	publicKey := new(PublicKey)
 	publicKey.Curve = privateKey.PublicKey.Curve
 	publicKey.X, publicKey.Y = elliptic.Unmarshal(publicKey.Curve, ciphertext[:curveParamsLength])
+
 	if publicKey.X == nil {
 		err = ErrInvalidPublicKey
 		return
 	}
+
 	if !publicKey.Curve.IsOnCurve(publicKey.X, publicKey.Y) {
 		err = ErrInvalidCurve
 		return
 	}
+
+	// Serialize the properties of the used elliptic curve for use
+	// as authentication data
+	curveParams := elliptic.Marshal(publicKey.Curve, publicKey.X, publicKey.Y)
 
 	sharedSecret, err := privateKey.GenerateShared(publicKey, params.KeyLen, params.KeyLen)
 	if err != nil {
@@ -330,6 +336,6 @@ func (privateKey *PrivateKey) Decrypt(rand io.Reader, ciphertext, sharedInformat
 		return
 	}
 
-	plaintext, err = SymmetricDecrypt(rand, params, encryptionKey, ciphertext[messageStart:messageEnd])
+	plaintext, err = SymmetricDecrypt(rand, params, encryptionKey, ciphertext[messageStart:messageEnd], curveParams)
 	return
 }

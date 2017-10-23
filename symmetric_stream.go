@@ -18,7 +18,7 @@ var (
 
 // CTREncrypt carries out CTR encryption using the block cipher specified in the
 // parameters.
-func CTREncrypt(rand io.Reader, params *ECIESParams, key, plaintext []byte) ([]byte, error) {
+func CTREncrypt(rand io.Reader, params *ECIESParams, key, plaintext, authenticationData []byte) ([]byte, error) {
 
 	stream, err := params.Cipher(key)
 	if err != nil {
@@ -36,7 +36,7 @@ func CTREncrypt(rand io.Reader, params *ECIESParams, key, plaintext []byte) ([]b
 
 // CTRDecrypt carries out CTR decryption using the block cipher specified in
 // the parameters
-func CTRDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext []byte) ([]byte, error) {
+func CTRDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext, authenticationData []byte) ([]byte, error) {
 
 	stream, err := params.Cipher(key)
 	if err != nil {
@@ -48,7 +48,7 @@ func CTRDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext []byte) ([]
 
 // CFBEncrypt performs Cipher Feedback (CFB) encryption using the block cipher specified in
 // the parameters
-func CFBEncrypt(rand io.Reader, params *ECIESParams, key, plaintext []byte) ([]byte, error) {
+func CFBEncrypt(rand io.Reader, params *ECIESParams, key, plaintext, authenticationData []byte) ([]byte, error) {
 
 	blockCipher, err := params.Cipher(key)
 	if err != nil {
@@ -66,7 +66,7 @@ func CFBEncrypt(rand io.Reader, params *ECIESParams, key, plaintext []byte) ([]b
 
 // CFBDecrypt performs Cipher Feedback (CFB) decryption using the block cipher specified in
 // the parameters
-func CFBDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext []byte) ([]byte, error) {
+func CFBDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext, authenticationData []byte) ([]byte, error) {
 
 	blockCipher, err := params.Cipher(key)
 	if err != nil {
