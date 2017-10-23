@@ -69,7 +69,7 @@ var (
 		HashAlgo:            crypto.SHA256,
 		Cipher:              aes.NewCipher,
 		BlockSize:           aes.BlockSize,
-		KeyLen:              16,
+		KeyLen:              32,
 		SymmetricCipherMode: GCMCipherMode,
 	}
 

@@ -199,8 +199,16 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 		return
 	}
 
+	symmetricKeyLength := 128 / 8
+	macKeyLength := 128 / 8
+
+	if params.KeyLen > 256/8 {
+		symmetricKeyLength = 256 / 8
+		macKeyLength = 256 / 8
+	}
+
 	// Derive a shared secret from the generated private key and the peer public key
-	sharedSecret, err := privateKey.GenerateShared(pub, params.KeyLen, params.KeyLen)
+	sharedSecret, err := privateKey.GenerateShared(pub, symmetricKeyLength, macKeyLength)
 	if err != nil {
 		return
 	}
@@ -208,16 +216,16 @@ func Encrypt(rand io.Reader, pub *PublicKey, plaintext, sharedInformation1, shar
 	// Extend the shared secret through Concatenation KDF to the desired length
 	// The extended key will then be split and used as an encryption key and digest key
 	hash := params.Hash()
-	derivedKey, err := concatKDF(hash, sharedSecret, sharedInformation1, params.KeyLen+params.KeyLen)
+	derivedKey, err := concatKDF(hash, sharedSecret, sharedInformation1, symmetricKeyLength+macKeyLength)
 	if err != nil {
 		return
 	}
 
 	// The derived key is split into encryption key and digest key
 	// which is then hashed to produce the final HMAC key
-	encryptionKey := derivedKey[:params.KeyLen]
+	encryptionKey := derivedKey[:symmetricKeyLength]
 
-	digestKey := derivedKey[params.KeyLen:]
+	digestKey := derivedKey[symmetricKeyLength:]
 	hash.Write(digestKey)
 	digestKey = hash.Sum(nil)
 	hash.Reset()
