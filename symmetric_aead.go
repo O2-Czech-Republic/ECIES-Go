@@ -19,17 +19,17 @@ func GCMEncrypt(rand io.Reader, params *ECIESParams, key, plaintext, authenticat
 		return
 	}
 
-	aeadCipher, err := cipher.NewGCM(blockCipher)
+	gcmCipher, err := cipher.NewGCM(blockCipher)
 	if err != nil {
 		return
 	}
 
-	nonce, err := GenerateIV(aeadCipher.NonceSize(), rand)
+	nonce, err := GenerateIV(gcmCipher.NonceSize(), rand)
 	if err != nil {
 		return
 	}
 
-	ciphertext = aeadCipher.Seal(nonce, nonce, plaintext, authenticationData)
+	ciphertext = gcmCipher.Seal(nonce, nonce, plaintext, authenticationData)
 	return
 
 }
@@ -43,13 +43,13 @@ func GCMDecrypt(rand io.Reader, params *ECIESParams, key, ciphertext, authentica
 		return
 	}
 
-	aeadCipher, err := cipher.NewGCM(blockCipher)
+	gcmCipher, err := cipher.NewGCM(blockCipher)
 	if err != nil {
 		return
 	}
 
-	nonce := ciphertext[:aeadCipher.NonceSize()]
-	plaintext, err = aeadCipher.Open(nil, nonce, ciphertext[aeadCipher.NonceSize():], authenticationData)
+	nonce := ciphertext[:gcmCipher.NonceSize()]
+	plaintext, err = gcmCipher.Open(nil, nonce, ciphertext[gcmCipher.NonceSize():], authenticationData)
 	return
 
 }
